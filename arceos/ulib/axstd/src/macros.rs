@@ -12,12 +12,24 @@ macro_rules! print {
         $crate::io::__print_impl(format_args!($($arg)*));
     }
 }
-
+#[macro_export]
+macro_rules! printc {
+    ($($arg:tt)*) => {
+        $crate::io::__print_impl_withcolor(format_args!($($arg)*));
+    }
+}
 /// Prints to the standard output, with a newline.
 #[macro_export]
 macro_rules! println {
     () => { $crate::print!("\n") };
     ($($arg:tt)*) => {
         $crate::io::__print_impl(format_args!("{}\n", format_args!($($arg)*)));
+    }
+}
+#[macro_export]
+macro_rules! printlnc {
+    () => { $crate::printc!("\n") };
+    ($($arg:tt)*) => {
+        $crate::io::__print_impl_withcolor(format_args!("{}\n", format_args!($($arg)*)));
     }
 }
