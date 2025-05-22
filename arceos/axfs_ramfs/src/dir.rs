@@ -1,7 +1,8 @@
 use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
 use alloc::{string::String, vec::Vec};
-
+use alloc::vec;
+use crate::alloc::string::ToString;
 use axfs_vfs::{VfsDirEntry, VfsNodeAttr, VfsNodeOps, VfsNodeRef, VfsNodeType};
 use axfs_vfs::{VfsError, VfsResult};
 use spin::RwLock;
@@ -164,7 +165,69 @@ impl VfsNodeOps for DirNode {
             self.remove_node(name)
         }
     }
-
+    fn rename(&self, src_path: &str, dst_path: &str) -> VfsResult {  
+        log::debug!("rename at ramfs, src_path: {}, dst_path: {}", src_path, dst_path);  
+        // 处理挂载点路径：如果目标路径以挂载点开头，提取相对路径  
+    let processed_dst_path = if dst_path.starts_with("/tmp/") {  
+        &dst_path[5..] // 移除 "/tmp/" 前缀  
+    } else if dst_path == "/tmp" {  
+        ""  
+    } else {  
+        dst_path  
+    };  
+    // 解析源路径和目标路径  
+    let (src_name, src_rest) = split_path(src_path);  
+    let (dst_name, dst_rest) = split_path(processed_dst_path);  
+      
+    // 处理路径中包含子目录的情况  
+    if let Some(src_rest) = src_rest {  
+        match src_name {  
+            "" | "." => return self.rename(src_rest, dst_path),  
+            ".." => return self.parent().ok_or(VfsError::NotFound)?.rename(src_rest, dst_path),  
+            _ => {  
+                let subdir = self.children.read().get(src_name).ok_or(VfsError::NotFound)?.clone();  
+                return subdir.rename(src_rest, dst_path);  
+            }  
+        }  
+    }  
+      
+    if let Some(dst_rest) = dst_rest {  
+        match dst_name {  
+            "" | "." => return self.rename(src_path, dst_rest),  
+            ".." => return self.parent().ok_or(VfsError::NotFound)?.rename(src_path, dst_rest),  
+            _ => {  
+                let subdir = self.children.read().get(dst_name).ok_or(VfsError::NotFound)?.clone();  
+                return subdir.rename(src_path, dst_rest);  
+            }  
+        }  
+    }  
+      
+    // 不允许重命名 "." 或 ".."  
+    if src_name.is_empty() || src_name == "." || src_name == ".." {  
+        return Err(VfsError::InvalidInput);  
+    }  
+    if dst_name.is_empty() || dst_name == "." || dst_name == ".." {  
+        return Err(VfsError::InvalidInput);  
+    }  
+      
+    // 获取写锁并执行原子操作  
+    let mut children = self.children.write();  
+      
+    // 检查源节点是否存在  
+    let src_node = children.get(src_name).ok_or(VfsError::NotFound)?.clone();  
+      
+    // 如果目标已存在，先删除  
+    if children.contains_key(dst_name) {  
+        log::warn!("dst file already exist, now remove it");  
+        children.remove(dst_name);  
+    }  
+      
+    // 直接移动节点：从源名称移除并插入到目标名称  
+    children.remove(src_name);  
+    children.insert(dst_name.to_string(), src_node);  
+      
+    Ok(())  
+    }
     axfs_vfs::impl_vfs_dir_default! {}
 }
 
