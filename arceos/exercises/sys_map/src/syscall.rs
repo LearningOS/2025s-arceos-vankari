@@ -8,7 +8,8 @@ use axtask::current;
 use axtask::TaskExtRef;
 use axhal::paging::MappingFlags;
 use arceos_posix_api as api;
-
+use arceos_posix_api::imp::fd_ops::get_file_like;
+use axhal::mem::VirtAddr;
 const SYS_IOCTL: usize = 29;
 const SYS_OPENAT: usize = 56;
 const SYS_CLOSE: usize = 57;
@@ -139,8 +140,90 @@ fn sys_mmap(
     flags: i32,
     fd: i32,
     _offset: isize,
-) -> isize {
-    unimplemented!("no sys_mmap!");
+) -> isize  {  
+      
+    // 解析标志位  
+    let mmap_flags = MmapFlags::from_bits_truncate(flags);  
+    let prot_flags = MmapProt::from_bits_truncate(prot);  
+    let mapping_flags = MappingFlags::from(prot_flags);  
+      
+    // 页对齐长度  
+    let aligned_length = (length + 0xfff) & !0xfff;  
+      
+    // 获取当前任务的地址空间  
+    let current_task = axtask::current();  
+    let mut aspace = current_task.task_ext().aspace.lock();  
+      
+    if mmap_flags.contains(MmapFlags::MAP_ANONYMOUS) {  
+        // 匿名映射实现  
+        let start_addr = VirtAddr::from(0x10000000);  
+        match aspace.map_alloc(start_addr, aligned_length, mapping_flags, true) {  
+            Ok(_) => return start_addr.as_usize() as isize,  
+            Err(_) => return -LinuxError::ENOMEM.code() as isize,  
+        }  
+    } else {  
+        // 文件映射实现  
+        if fd < 0 {  
+            return -LinuxError::EBADF.code() as isize;  
+        }  
+          
+        // 为文件映射在用户地址空间中分配地址  
+        let start_addr = VirtAddr::from(0x20000000);  
+          
+        // 首先在地址空间中建立映射  
+        match aspace.map_alloc(start_addr, aligned_length, mapping_flags, true) {  
+            Ok(_) => {  
+                // 映射建立成功后，读取文件内容到映射的内存中  
+                let buffer_regions = aspace.translated_byte_buffer(start_addr, length);  
+                  
+                if let Some(regions) = buffer_regions {  
+                    let mut total_read = 0;  
+                      
+                    for region in regions {  
+                        if total_read >= length {  
+                            break;  
+                        }  
+                          
+                        let read_size = core::cmp::min(region.len(), length - total_read);  
+                        let buffer = &mut region[..read_size];  
+                          
+                        // 尝试读取文件内容  
+                        if let Ok(file_like) = get_file_like(fd) {  
+                            match file_like.read(buffer) {  
+                                Ok(bytes_read) => {  
+                                    total_read += bytes_read;  
+                                    // 如果读取的字节数少于缓冲区大小，清零剩余部分  
+                                    if bytes_read < buffer.len() {  
+                                        unsafe {  
+                                            core::ptr::write_bytes(  
+                                                buffer.as_mut_ptr().add(bytes_read),  
+                                                0,  
+                                                buffer.len() - bytes_read  
+                                            );  
+                                        }  
+                                    }  
+                                }  
+                                Err(_) => {  
+                                    // 读取失败，清零整个区域  
+                                    unsafe {  
+                                        core::ptr::write_bytes(buffer.as_mut_ptr(), 0, buffer.len());  
+                                    }  
+                                }  
+                            }  
+                        } else {  
+                            // 无法获取文件对象，清零区域  
+                            unsafe {  
+                                core::ptr::write_bytes(buffer.as_mut_ptr(), 0, buffer.len());  
+                            }  
+                        }  
+                    }  
+                }  
+                  
+                return start_addr.as_usize() as isize;  
+            }  
+            Err(_) => return -LinuxError::ENOMEM.code() as isize,  
+        }  
+    }  
 }
 
 fn sys_openat(dfd: c_int, fname: *const c_char, flags: c_int, mode: api::ctypes::mode_t) -> isize {
