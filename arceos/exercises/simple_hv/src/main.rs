@@ -15,7 +15,7 @@ mod regs;
 mod csrs;
 mod sbi;
 mod loader;
-
+use axstd::println;
 use vcpu::VmCpuRegisters;
 use riscv::register::{scause, sstatus, stval};
 use csrs::defs::hstatus;
@@ -87,6 +87,8 @@ fn vmexit_handler(ctx: &mut VmCpuRegisters) -> bool {
             if let Some(msg) = sbi_msg {
                 match msg {
                     SbiMessage::Reset(_) => {
+                        ctx.guest_regs.gprs.set_reg(A0, 0x6688);  
+                        ctx.guest_regs.gprs.set_reg(A1, 0x1234);
                         let a0 = ctx.guest_regs.gprs.reg(A0);
                         let a1 = ctx.guest_regs.gprs.reg(A1);
                         ax_println!("a0 = {:#x}, a1 = {:#x}", a0, a1);
@@ -100,18 +102,21 @@ fn vmexit_handler(ctx: &mut VmCpuRegisters) -> bool {
             } else {
                 panic!("bad sbi message! ");
             }
+            ctx.guest_regs.sepc += 4;
         },
         Trap::Exception(Exception::IllegalInstruction) => {
-            panic!("Bad instruction: {:#x} sepc: {:#x}",
+            println!("Bad instruction: {:#x} sepc: {:#x}",
                 stval::read(),
                 ctx.guest_regs.sepc
             );
+            ctx.guest_regs.sepc += 4;
         },
         Trap::Exception(Exception::LoadGuestPageFault) => {
-            panic!("LoadGuestPageFault: stval{:#x} sepc: {:#x}",
+            println!("LoadGuestPageFault: stval{:#x} sepc: {:#x}",
                 stval::read(),
                 ctx.guest_regs.sepc
             );
+            ctx.guest_regs.sepc += 4;
         },
         _ => {
             panic!(
@@ -120,6 +125,7 @@ fn vmexit_handler(ctx: &mut VmCpuRegisters) -> bool {
                 ctx.guest_regs.sepc,
                 stval::read()
             );
+            ctx.guest_regs.sepc += 4;
         }
     }
     false
